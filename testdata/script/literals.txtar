@@ -89,6 +89,8 @@ var array [arrayLen]byte
 
 type typeAlias [arrayLen]byte
 
+// Broke before: len(&(([8]byte{...}))) as an array length stopped compiling
+// when the parenthesized addressed composite was rewritten to &(decoder()).
 type parenthesizedArrayPointerLen [len(&(([8]byte{1, 2, 3, 4, 5, 6, 7, 8})))]byte
 
 func main() {

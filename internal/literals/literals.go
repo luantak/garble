@@ -41,7 +41,6 @@ type NameProviderFunc func(rand *mathrand.Rand, baseName string) string
 // Obfuscate replaces literals with obfuscated anonymous functions.
 func Obfuscate(rand *mathrand.Rand, file *ast.File, info *types.Info, linkStrings map[*types.Var]string, nameFunc NameProviderFunc) *ast.File {
 	or := newObfRand(rand, file, nameFunc)
-	addressed := addressedCompositeLiterals(file, info)
 	pre := func(cursor *astutil.Cursor) bool {
 		switch node := cursor.Node().(type) {
 		case *ast.FuncDecl:
@@ -70,21 +69,28 @@ func Obfuscate(rand *mathrand.Rand, file *ast.File, info *types.Info, linkString
 				}
 			}
 		case *ast.UnaryExpr:
-			addressedLiteral, ok := addressed[node]
-			if !ok {
+			// Handle &T{...} / &([]byte{...}) before children are visited.
+			// A parenthesized composite must never first become &(decoder()),
+			// since a call is not addressable.
+			if node.Op != token.AND {
 				return true
 			}
-			if addressedLiteral.constantContext {
-				// A constant len/cap expression does not evaluate its array
-				// operand. Leave the entire address expression unchanged.
+			literal := unwrapCompositeLiteral(node.X)
+			if literal == nil {
+				return true
+			}
+			// Exclude when a parent expression is a folded constant (len/cap/…).
+			if parent, ok := cursor.Parent().(ast.Expr); ok && info.Types[parent].Value != nil {
 				return false
 			}
-			newnode := handleCompositeLiteral(or, true, addressedLiteral.literal, info)
+			newnode := handleCompositeLiteral(or, true, literal, info)
 			if newnode != nil {
-				// Replace the entire address expression before visiting its
-				// child. In particular, a parenthesized composite must never
-				// first become &(decoder()), since a call is not addressable.
 				cursor.Replace(newnode)
+				return false
+			}
+			// Even when we do not obfuscate, do not descend into a parenthesized
+			// operand: the post walk would rewrite the composite alone.
+			if _, ok := node.X.(*ast.ParenExpr); ok {
 				return false
 			}
 		}
@@ -158,41 +164,7 @@ func Obfuscate(rand *mathrand.Rand, file *ast.File, info *types.Info, linkString
 	return newFile
 }
 
-type addressedCompositeLiteral struct {
-	literal         *ast.CompositeLit
-	constantContext bool
-}
-
-// addressedCompositeLiterals finds address expressions whose operand is a
-// composite literal, allowing any number of parentheses around the literal.
-// It records constant ancestors so the rewrite does not turn a constant
-// len/cap expression into a runtime call.
-func addressedCompositeLiterals(root ast.Node, info *types.Info) map[*ast.UnaryExpr]addressedCompositeLiteral {
-	result := make(map[*ast.UnaryExpr]addressedCompositeLiteral)
-	var stack []ast.Node
-	ast.Inspect(root, func(node ast.Node) bool {
-		if node == nil {
-			stack = stack[:len(stack)-1]
-			return false
-		}
-		if unary, ok := node.(*ast.UnaryExpr); ok && unary.Op == token.AND {
-			if literal := unwrapCompositeLiteral(unary.X); literal != nil {
-				constantContext := false
-				for _, ancestor := range stack {
-					if expr, ok := ancestor.(ast.Expr); ok && info.Types[expr].Value != nil {
-						constantContext = true
-						break
-					}
-				}
-				result[unary] = addressedCompositeLiteral{literal: literal, constantContext: constantContext}
-			}
-		}
-		stack = append(stack, node)
-		return true
-	})
-	return result
-}
-
+// unwrapCompositeLiteral returns the composite literal beneath any parentheses.
 func unwrapCompositeLiteral(expr ast.Expr) *ast.CompositeLit {
 	for {
 		switch node := expr.(type) {
