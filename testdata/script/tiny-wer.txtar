@@ -1,8 +1,15 @@
 [!windows] skip 'this test checks Windows Error Reporting behavior'
 
-# Tiny mode suppresses traceback output, but runtime/debug.SetTraceback still
-# has non-printing semantics. In particular, "wer" must enable Windows Error
-# Reporting by clearing SEM_NOGPFAULTERRORBOX.
+# Why emptying runtime.setTraceback breaks Windows:
+#
+# Tiny mode strips traceback *printing*, but setTraceback also updates
+# process-wide runtime state. On Windows, debug.SetTraceback("wer") clears
+# SEM_NOGPFAULTERRORBOX via SetErrorMode so Windows Error Reporting can show
+# a crash dialog / collect dumps. If tiny empties setTraceback's body, that
+# side effect never runs — WER stays suppressed even after SetTraceback("wer").
+#
+# This test starts with SEM_NOGPFAULTERRORBOX set (error box suppressed),
+# calls SetTraceback("wer"), and checks the flag was cleared.
 exec garble -tiny run .
 stderr '^before true$'
 stderr '^after false$'
@@ -10,7 +17,7 @@ stderr '^after false$'
 -- go.mod --
 module test/main
 
-go 1.26
+go 1.23
 -- main.go --
 package main
 
