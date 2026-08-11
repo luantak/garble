@@ -811,6 +811,7 @@ func (tf *transformer) transformCompile(args []string) ([]string, error) {
 
 	newPaths := make([]string, 0, len(files))
 	runtimeStrippedByFile := make(map[string]map[string]bool)
+	runtimeDependencyStrippedByFile := make(map[string]runtimeDependencyStrips)
 
 	for i, file := range files {
 		basename := filepath.Base(paths[i])
@@ -819,7 +820,7 @@ func (tf *transformer) transformCompile(args []string) ([]string, error) {
 		case "runtime":
 			if flagTiny {
 				// strip unneeded runtime code
-				runtimeStrippedByFile[basename] = stripRuntime(basename, file)
+				runtimeStrippedByFile[basename] = stripRuntime(basename, file, tf.info)
 				tf.useAllImports(file)
 			}
 			if basename == "symtab.go" {
@@ -828,6 +829,11 @@ func (tf *transformer) transformCompile(args []string) ([]string, error) {
 		case "internal/abi":
 			if basename == "symtab.go" {
 				updateMagicValue(file, magicValue())
+			}
+		}
+		if flagTiny {
+			if _, ok := runtimeFatalCallNames[tf.curPkg.ImportPath]; ok {
+				runtimeDependencyStrippedByFile[basename] = stripRuntimeDependency(tf.curPkg.ImportPath, basename, file, tf.info)
 			}
 		}
 		if err := tf.transformDirectives(file.Comments); err != nil {
@@ -858,6 +864,11 @@ func (tf *transformer) transformCompile(args []string) ([]string, error) {
 	}
 	if tf.curPkg.ImportPath == "runtime" && flagTiny {
 		validateDirectRuntimeStripping(runtimeStrippedByFile)
+	}
+	if flagTiny {
+		if _, ok := runtimeFatalCallNames[tf.curPkg.ImportPath]; ok {
+			validateRuntimeDependencyStripping(tf.curPkg.ImportPath, runtimeDependencyStrippedByFile)
+		}
 	}
 	if err := saveDebugArtifactsForPkg(tf.curPkg, debugCacheKindCompile, debugArtifacts); err != nil {
 		return nil, err
