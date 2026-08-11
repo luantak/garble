@@ -5,7 +5,7 @@ package main
 
 // toolchainNameDependencies contains declarations whose exact symbol names are
 // consumed by the Go runtime even though they are not compiler intrinsics or
-// go:linkname targets.
+// go linkname targets.
 //
 // runtime.stkframe.argMapInternal matches these reflect assembly stubs by name
 // to synthesize their dynamic argument maps while the garbage collector scans
