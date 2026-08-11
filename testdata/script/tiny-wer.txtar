@@ -1,0 +1,51 @@
+[!windows] skip 'this test checks Windows Error Reporting behavior'
+
+# Why emptying runtime.setTraceback breaks Windows:
+#
+# Tiny mode strips traceback *printing*, but setTraceback also updates
+# process-wide runtime state. On Windows, debug.SetTraceback("wer") clears
+# SEM_NOGPFAULTERRORBOX via SetErrorMode so Windows Error Reporting can show
+# a crash dialog / collect dumps. If tiny empties setTraceback's body, that
+# side effect never runs — WER stays suppressed even after SetTraceback("wer").
+#
+# This test starts with SEM_NOGPFAULTERRORBOX set (error box suppressed),
+# calls SetTraceback("wer"), and checks the flag was cleared.
+exec garble -tiny run .
+stderr '^before true$'
+stderr '^after false$'
+
+-- go.mod --
+module test/main
+
+go 1.23
+-- main.go --
+package main
+
+import (
+	"runtime/debug"
+	"syscall"
+)
+
+const semNoGPFaultErrorBox = 0x0002
+
+var (
+	kernel32     = syscall.NewLazyDLL("kernel32.dll")
+	getErrorMode = kernel32.NewProc("GetErrorMode")
+	setErrorMode = kernel32.NewProc("SetErrorMode")
+)
+
+func errorBoxSuppressed() bool {
+	mode, _, _ := getErrorMode.Call()
+	return mode&semNoGPFaultErrorBox != 0
+}
+
+func main() {
+	originalMode, _, _ := getErrorMode.Call()
+	println("before", errorBoxSuppressed())
+	debug.SetTraceback("wer")
+	println("after", errorBoxSuppressed())
+
+	// Avoid changing process behavior after the assertion above.
+	debug.SetTraceback("system")
+	setErrorMode.Call(originalMode)
+}

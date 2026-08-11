@@ -202,13 +202,10 @@ func stripRuntime(basename string, file *ast.File) map[string]bool {
 			if funcDecl.Name.Name == "schedtrace" {
 				funcDecl.Body.List = nil
 			}
-		case "runtime1.go":
-			switch funcDecl.Name.Name {
-			case "setTraceback":
-				// tracebacks are completely hidden, no
-				// sense keeping this function
-				funcDecl.Body.List = nil
-			}
+		// Intentionally do not empty runtime1.go:setTraceback. Besides
+		// controlling traceback printing, it updates process state — on
+		// Windows, debug.SetTraceback("wer") clears SEM_NOGPFAULTERRORBOX so
+		// Windows Error Reporting can run. See testdata/script/tiny-wer.txtar.
 		case "runtime.go":
 			// writeErrStr bypasses the print builtins and writes fixed fatal
 			// diagnostics straight to stderr (and SetCrashOutput). Tiny mode
