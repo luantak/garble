@@ -68,6 +68,31 @@ func Obfuscate(rand *mathrand.Rand, file *ast.File, info *types.Info, linkString
 					return false
 				}
 			}
+		case *ast.UnaryExpr:
+			// Handle &T{...} / &([]byte{...}) before children are visited.
+			// A parenthesized composite must never first become &(decoder()),
+			// since a call is not addressable.
+			if node.Op != token.AND {
+				return true
+			}
+			literal := unwrapCompositeLiteral(node.X)
+			if literal == nil {
+				return true
+			}
+			// Exclude when a parent expression is a folded constant (len/cap/…).
+			if parent, ok := cursor.Parent().(ast.Expr); ok && info.Types[parent].Value != nil {
+				return false
+			}
+			newnode := handleCompositeLiteral(or, true, literal, info)
+			if newnode != nil {
+				cursor.Replace(newnode)
+				return false
+			}
+			// Even when we do not obfuscate, do not descend into a parenthesized
+			// operand: the post walk would rewrite the composite alone.
+			if _, ok := node.X.(*ast.ParenExpr); ok {
+				return false
+			}
 		}
 		return true
 	}
@@ -137,6 +162,20 @@ func Obfuscate(rand *mathrand.Rand, file *ast.File, info *types.Info, linkString
 	newFile := astutil.Apply(file, pre, post).(*ast.File)
 	or.proxyDispatcher.AddToFile(newFile)
 	return newFile
+}
+
+// unwrapCompositeLiteral returns the composite literal beneath any parentheses.
+func unwrapCompositeLiteral(expr ast.Expr) *ast.CompositeLit {
+	for {
+		switch node := expr.(type) {
+		case *ast.CompositeLit:
+			return node
+		case *ast.ParenExpr:
+			expr = node.X
+		default:
+			return nil
+		}
+	}
 }
 
 // handleCompositeLiteral checks if the input node is []byte or [...]byte and
