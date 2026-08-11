@@ -1,6 +1,7 @@
 # Tiny mode
 exec garble -tiny build
 ! binsubstr main$exe 'garble_main.go' 'fmt/print.go'
+! binsubstr main$exe 'fatal: morestack on g0'
 ! binsubstr main$exe 'all goroutines are asleep - deadlock!' 'no goroutines (main called runtime.Goexit) - deadlock!'
 ! binsubstr main$exe 'panicwrap: no ( in ' 'unpinned Go pointer stored into non-Go memory'
 ! binsubstr main$exe 'runtime: unexpected metric registration for ' 'runtime.SetFinalizer: first argument is '
@@ -65,7 +66,9 @@ func main() {
 		var mutex sync.Mutex
 		mutex.Unlock()
 		var rwmutex sync.RWMutex
-		rwmutex.Unlock()
+		// Call RUnlock so the binary retains the RWMutex diagnostic fragment
+		// that binsubstr asserts is stripped above.
+		rwmutex.RUnlock()
 	}
 
 	// Keep SetFinalizer's computed fatal paths linked so the binary scan above

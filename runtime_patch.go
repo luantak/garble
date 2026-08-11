@@ -297,7 +297,13 @@ func validateRuntimeDependencyStripping(importPath string, strippedByFile map[st
 // stripRuntime removes unnecessary code from the runtime,
 // such as panic and fatal error printing, and code that
 // prints trace/debug info of the runtime.
-func stripRuntime(basename string, file *ast.File, info *types.Info) {
+func stripRuntime(basename string, file *ast.File, info *types.Info) map[string]bool {
+	strippedFunctions := make(map[string]bool)
+	emptyBody := func(funcDecl *ast.FuncDecl) {
+		funcDecl.Body.List = nil
+		strippedFunctions[funcDecl.Name.Name] = true
+	}
+
 	stripPrints := func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
@@ -329,6 +335,19 @@ func stripRuntime(basename string, file *ast.File, info *types.Info) {
 			switch funcDecl.Name.Name {
 			case "printany", "printanycustomtype":
 				funcDecl.Body.List = nil
+			}
+		case "debuglog.go":
+			// printDebugLog is called directly from fatal panic and signal
+			// paths. Its implementation can also write through gwrite, so the
+			// generic print/println rewrite below is not sufficient.
+			if funcDecl.Name.Name == "printDebugLog" {
+				emptyBody(funcDecl)
+			}
+		case "hexdump.go":
+			// Go 1.26 moved hexdumpWords out of print.go. It is only used for
+			// fatal GC, signal, and traceback diagnostics in production builds.
+			if funcDecl.Name.Name == "hexdumpWords" {
+				emptyBody(funcDecl)
 			}
 		case "mgcscavenge.go":
 			// used in tracing the scavenger
@@ -364,6 +383,16 @@ func stripRuntime(basename string, file *ast.File, info *types.Info) {
 				// sense keeping this function
 				funcDecl.Body.List = nil
 			}
+		case "runtime.go":
+			// writeErrStr bypasses the print builtins and writes fixed fatal
+			// diagnostics straight to stderr (and SetCrashOutput). Tiny mode
+			// already suppresses those same diagnostics through the ordinary
+			// runtime print paths, so suppress this bypass as well. Do not
+			// empty writeErrData or gwrite: application print/println relies on
+			// those lower-level writers.
+			if funcDecl.Name.Name == "writeErrStr" {
+				emptyBody(funcDecl)
+			}
 		case "traceback.go":
 			// only used for printing tracebacks
 			switch funcDecl.Name.Name {
@@ -387,13 +416,30 @@ func stripRuntime(basename string, file *ast.File, info *types.Info) {
 		// its internal calls breaks interface and pointer formatting. The helper
 		// declaration is needed by calls rewritten in the other runtime files.
 		file.Decls = append(file.Decls, hidePrintDecl)
-		return
+		return strippedFunctions
 	}
 
 	// replace all 'print' and 'println' statements in
 	// the runtime with an empty func, which will be
 	// optimized out by the compiler
 	ast.Inspect(file, stripPrints)
+	return strippedFunctions
+}
+
+var requiredDirectRuntimeStrips = map[string][]string{
+	"debuglog.go": {"printDebugLog"},
+	"hexdump.go":  {"hexdumpWords"},
+	"runtime.go":  {"writeErrStr"},
+}
+
+func validateDirectRuntimeStripping(strippedByFile map[string]map[string]bool) {
+	for basename, names := range requiredDirectRuntimeStrips {
+		for _, name := range names {
+			if !strippedByFile[basename][name] {
+				panic("runtime stripping rule did not match " + basename + ":" + name)
+			}
+		}
+	}
 }
 
 var hidePrintDecl = &ast.FuncDecl{
